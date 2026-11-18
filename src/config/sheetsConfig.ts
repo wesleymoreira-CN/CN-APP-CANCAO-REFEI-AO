@@ -19,3 +19,12 @@ function readEnvAppsScriptUrl(): string {
 
 export const DEFAULT_APPS_SCRIPT_URL: string =
   readEnvAppsScriptUrl() || BAKED_APPS_SCRIPT_URL.trim();
+
+/**
+ * Link público padrão do app publicado no AI Studio (Shared App URL) e sua URL curta.
+ * Requer que o botão "Share / Publish" esteja ativo no projeto para abrir sem conta de desenvolvedor.
+ */
+export const PUBLIC_SHARED_APP_URL =
+  'https://ais-pre-6ji7f4hlumvf23ycg3dpnb-876516775031.us-east1.run.app';
+
+export const PUBLIC_SHORT_APP_URL = 'https://tinyurl.com/2bgs6erl';

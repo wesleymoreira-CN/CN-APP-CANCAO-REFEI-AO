@@ -182,8 +182,89 @@ export function buildMobileShareUrl(
   }
 
   const cleanAppBase = parsed.origin;
-  const shareUrl = `${cleanAppBase}/?scriptUrl=${encodeURIComponent(scriptCheck.cleanUrl)}`;
+  const usesGlobalBakedScript =
+    Boolean(DEFAULT_APPS_SCRIPT_URL) && scriptCheck.cleanUrl === DEFAULT_APPS_SCRIPT_URL;
+  const shareUrl = usesGlobalBakedScript
+    ? cleanAppBase
+    : `${cleanAppBase}/?scriptUrl=${encodeURIComponent(scriptCheck.cleanUrl)}`;
   return { valid: true, shareUrl, cleanAppBase };
+}
+
+export async function shortenPublicUrl(
+  targetUrl: string
+): Promise<{ success: boolean; shortUrl?: string; message?: string }> {
+  let raw = (targetUrl || '').trim();
+  if (!raw) {
+    return {
+      success: false,
+      message: 'Informe primeiro a URL pública do site (ex: https://seusite.netlify.app) para encurtar.',
+    };
+  }
+  if (!/^https?:\/\//i.test(raw)) {
+    raw = `https://${raw}`;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return {
+      success: false,
+      message: 'Endereço inválido para encurtar. Use a URL completa começando com https://',
+    };
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (host.startsWith('ais-dev-')) {
+    return {
+      success: false,
+      message:
+        'A URL "ais-dev-..." é exclusiva para desenvolvedor e não abre para outras pessoas. Use o link público (ais-pre-... após Share/Publish ou seu site Netlify).',
+    };
+  }
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return {
+      success: false,
+      message: 'Links locais (localhost) não abrem em outros celulares. Use um endereço público HTTPS.',
+    };
+  }
+  if (host.includes('script.google.com') || host.includes('docs.google.com')) {
+    return {
+      success: false,
+      message: 'Cole o endereço público do aplicativo (site), e não o link interno da planilha Google.',
+    };
+  }
+
+  try {
+    const res = await fetch('/api/shorten-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: parsed.toString() }),
+    });
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (!ct.includes('application/json')) {
+      return {
+        success: false,
+        message: 'Serviço de encurtamento indisponível neste ambiente offline/APK.',
+      };
+    }
+    const data = await res.json();
+    if (data?.ok && typeof data.shortUrl === 'string' && data.shortUrl.startsWith('http')) {
+      return { success: true, shortUrl: data.shortUrl };
+    }
+    return {
+      success: false,
+      message: data?.message || 'Não foi possível gerar a URL curta no momento.',
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message:
+        err instanceof Error
+          ? `Falha ao gerar URL curta: ${err.message}`
+          : 'Falha de conexão ao tentar encurtar a URL.',
+    };
+  }
 }
 
 export function validateAppsScriptEndpoint(rawUrl: string): { valid: boolean; cleanUrl: string; error?: string } {
@@ -311,14 +392,11 @@ export function syncAddressBarWithScriptUrl(scriptUrl: string): void {
 
     const clean = (scriptUrl || '').trim();
     const url = new URL(window.location.href);
-    if (!clean) {
+    if (!clean || (DEFAULT_APPS_SCRIPT_URL && clean === DEFAULT_APPS_SCRIPT_URL)) {
       if (url.searchParams.has('scriptUrl')) {
         url.searchParams.delete('scriptUrl');
         window.history.replaceState(null, '', url.toString());
       }
-      return;
-    }
-    if (DEFAULT_APPS_SCRIPT_URL && clean === DEFAULT_APPS_SCRIPT_URL) {
       return;
     }
     if (url.searchParams.get('scriptUrl') !== clean) {

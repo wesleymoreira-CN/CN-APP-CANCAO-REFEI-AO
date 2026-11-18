@@ -13,7 +13,13 @@ import {
   PUBLIC_APP_URL_STORAGE_KEY,
   resolveDefaultPublicAppUrl,
   buildMobileShareUrl,
+  shortenPublicUrl,
 } from '../services/externalDatabaseService';
+import {
+  DEFAULT_APPS_SCRIPT_URL,
+  PUBLIC_SHARED_APP_URL,
+  PUBLIC_SHORT_APP_URL,
+} from '../config/sheetsConfig';
 import { 
   FileSpreadsheet, 
   X, 
@@ -33,7 +39,8 @@ import {
   Link2,
   Clock,
   Trash2,
-  Smartphone
+  Smartphone,
+  Globe
 } from 'lucide-react';
 
 interface GoogleSheetsDatabaseModalProps {
@@ -75,6 +82,13 @@ export const GoogleSheetsDatabaseModal: React.FC<GoogleSheetsDatabaseModalProps>
   const [copiedMobileLink, setCopiedMobileLink] = useState(false);
   const [copiedExecOnly, setCopiedExecOnly] = useState(false);
   const [copiedNetlifyEnv, setCopiedNetlifyEnv] = useState(false);
+  const [isShorteningUrl, setIsShorteningUrl] = useState(false);
+  const [shortUrlResult, setShortUrlResult] = useState<string>(() => {
+    const def = resolveDefaultPublicAppUrl();
+    if (!def || def === PUBLIC_SHARED_APP_URL) return PUBLIC_SHORT_APP_URL;
+    return '';
+  });
+  const [copiedShortUrl, setCopiedShortUrl] = useState(false);
   const [showPasswords, setShowPasswords] = useState(false);
 
   useEffect(() => {
@@ -290,6 +304,84 @@ export const GoogleSheetsDatabaseModal: React.FC<GoogleSheetsDatabaseModalProps>
         type: 'error',
         text: `Não foi possível copiar automaticamente. Link para abrir no celular: ${built.shareUrl}`,
       });
+    }
+  };
+
+  const handleUseSharedAppUrl = () => {
+    setFeedbackMsg(null);
+    setPublicAppUrlInput(PUBLIC_SHARED_APP_URL);
+    try {
+      localStorage.setItem(PUBLIC_APP_URL_STORAGE_KEY, PUBLIC_SHARED_APP_URL);
+    } catch {
+      // ignore
+    }
+    const activeScript = (scriptUrlInput || appsScriptUrl || DEFAULT_APPS_SCRIPT_URL).trim();
+    if (!activeScript || activeScript === DEFAULT_APPS_SCRIPT_URL) {
+      setShortUrlResult(PUBLIC_SHORT_APP_URL);
+    } else {
+      setShortUrlResult('');
+    }
+  };
+
+  const handleGenerateShortUrl = async () => {
+    setFeedbackMsg(null);
+    const baseCandidate = publicAppUrlInput.trim() || PUBLIC_SHARED_APP_URL;
+    if (!publicAppUrlInput.trim()) {
+      setPublicAppUrlInput(baseCandidate);
+      try {
+        localStorage.setItem(PUBLIC_APP_URL_STORAGE_KEY, baseCandidate);
+      } catch {
+        // ignore
+      }
+    }
+
+    const activeScript = scriptUrlInput || appsScriptUrl || DEFAULT_APPS_SCRIPT_URL;
+    const built = buildMobileShareUrl(baseCandidate, activeScript);
+    if (!built.valid) {
+      setFeedbackMsg({
+        type: 'error',
+        text: built.error || 'Informe um endereço público válido (ex: https://seusite.netlify.app) para gerar a URL pequena.',
+      });
+      return;
+    }
+
+    setIsShorteningUrl(true);
+    const res = await shortenPublicUrl(built.shareUrl);
+    setIsShorteningUrl(false);
+
+    let finalShort = res.shortUrl || '';
+    if (!finalShort && built.shareUrl === PUBLIC_SHARED_APP_URL) {
+      finalShort = PUBLIC_SHORT_APP_URL;
+    }
+
+    if (!finalShort) {
+      setFeedbackMsg({
+        type: 'error',
+        text: res.message || 'Não foi possível encurtar esta URL agora.',
+      });
+      return;
+    }
+
+    setShortUrlResult(finalShort);
+    const copied = await copyTextSafely(finalShort);
+    if (copied) {
+      setCopiedShortUrl(true);
+      setTimeout(() => setCopiedShortUrl(false), 3500);
+    }
+    setFeedbackMsg({
+      type: 'success',
+      text: built.cleanAppBase.includes('ais-pre-')
+        ? `URL pequena pronta e copiada: ${finalShort} — Lembre-se de deixar o botão "Share / Publish" ativado no AI Studio para que pessoas sem conta de desenvolvedor possam abrir sem Erro 404.`
+        : `URL pequena pronta e copiada: ${finalShort} — Qualquer usuário pode abrir direto no celular ou navegador sem precisar configurar nada!`,
+    });
+  };
+
+  const handleCopyShortUrl = async () => {
+    if (!shortUrlResult) return;
+    const ok = await copyTextSafely(shortUrlResult);
+    if (ok) {
+      setCopiedShortUrl(true);
+      setTimeout(() => setCopiedShortUrl(false), 3000);
     }
   };
 
@@ -559,35 +651,77 @@ export const GoogleSheetsDatabaseModal: React.FC<GoogleSheetsDatabaseModalProps>
                     </span>
                   </div>
 
-                  <div className="space-y-1">
-                    <label className="block text-[11px] font-bold text-sky-950 dark:text-sky-100">
-                      Endereço do seu Site Publicado no Netlify (ex: https://seusite.netlify.app):
-                    </label>
-                    <input
-                      type="url"
-                      value={publicAppUrlInput}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setPublicAppUrlInput(val);
-                        try {
-                          const trimmed = val.trim();
-                          if (trimmed) {
-                            localStorage.setItem(PUBLIC_APP_URL_STORAGE_KEY, trimmed);
-                          } else {
-                            localStorage.removeItem(PUBLIC_APP_URL_STORAGE_KEY);
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="block text-[11px] font-bold text-sky-950 dark:text-sky-100">
+                        Endereço do Site Público p/ Usuários (Netlify ou Link Compartilhado):
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleUseSharedAppUrl}
+                        className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-sky-200/80 hover:bg-sky-300/80 dark:bg-sky-900 dark:hover:bg-sky-800 text-sky-900 dark:text-sky-100 transition-colors cursor-pointer"
+                      >
+                        Preencher Link Público do App (ais-pre)
+                      </button>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="url"
+                        value={publicAppUrlInput}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setPublicAppUrlInput(val);
+                          setShortUrlResult('');
+                          try {
+                            const trimmed = val.trim();
+                            if (trimmed) {
+                              localStorage.setItem(PUBLIC_APP_URL_STORAGE_KEY, trimmed);
+                            } else {
+                              localStorage.removeItem(PUBLIC_APP_URL_STORAGE_KEY);
+                            }
+                          } catch {
+                            // ignore
                           }
-                        } catch {
-                          // ignore
-                        }
-                      }}
-                      placeholder="https://seusite.netlify.app"
-                      className="w-full px-3 py-2 bg-white dark:bg-neutral-900 border border-sky-300 dark:border-sky-700 rounded-lg text-xs font-mono text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    />
+                        }}
+                        placeholder="https://seusite.netlify.app (ou clique acima p/ usar o link compartilhado)"
+                        className="flex-1 px-3 py-2 bg-white dark:bg-neutral-900 border border-sky-300 dark:border-sky-700 rounded-lg text-xs font-mono text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleGenerateShortUrl}
+                        disabled={isShorteningUrl}
+                        className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-all shrink-0 shadow-xs disabled:opacity-50"
+                      >
+                        <Globe className={`w-3.5 h-3.5 ${isShorteningUrl ? 'animate-spin' : ''}`} />
+                        <span>{isShorteningUrl ? 'Encurtando...' : 'Gerar URL Pequena'}</span>
+                      </button>
+                    </div>
                   </div>
 
-                  {publicAppUrlInput.toLowerCase().includes('ais-pre-') && (
+                  {shortUrlResult && (
+                    <div className="p-2.5 rounded-xl bg-emerald-100/90 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
+                          URL Pequena p/ Enviar aos Usuários (sem conta de dev):
+                        </p>
+                        <p className="text-xs font-mono font-bold text-emerald-950 dark:text-emerald-100 break-all">
+                          {shortUrlResult}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCopyShortUrl}
+                        className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-bold rounded-lg flex items-center justify-center gap-1.5 shrink-0 cursor-pointer transition-colors"
+                      >
+                        {copiedShortUrl ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedShortUrl ? 'Copiado!' : 'Copiar URL Pequena'}</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {(publicAppUrlInput.toLowerCase().includes('ais-pre-') || (!publicAppUrlInput.trim() && shortUrlResult === PUBLIC_SHORT_APP_URL)) && (
                     <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 font-semibold">
-                      Atenção: links <span className="font-mono">ais-pre-...</span> dão <strong>Erro 404</strong> no celular se você não tiver clicado em &ldquo;Share / Deploy&rdquo; aqui no editor. Se você usa Netlify, apague este campo e digite o endereço do seu Netlify (ex.: <span className="font-mono">https://seusite.netlify.app</span>).
+                      Importante: o link curto <span className="font-mono">{PUBLIC_SHORT_APP_URL}</span> abre o app público (<span className="font-mono">ais-pre-...</span>) já conectado na planilha. Para outras pessoas abrirem sem conta de desenvolvedor e sem Erro 404, ative o botão <strong>Share / Publish</strong> aqui no AI Studio (ou cole o endereço do seu site no Netlify e clique em <strong>Gerar URL Pequena</strong>).
                     </div>
                   )}
 
@@ -596,7 +730,7 @@ export const GoogleSheetsDatabaseModal: React.FC<GoogleSheetsDatabaseModalProps>
                     if (!preview.valid) return null;
                     return (
                       <div className="bg-white/80 dark:bg-neutral-900/80 border border-sky-200 dark:border-sky-800 rounded-lg px-2.5 py-1.5 text-[10px] font-mono break-all text-sky-900 dark:text-sky-200">
-                        <strong className="font-sans">Prévia do link p/ celular:</strong> {preview.shareUrl}
+                        <strong className="font-sans">Link completo conectado à planilha:</strong> {preview.shareUrl}
                       </div>
                     );
                   })()}

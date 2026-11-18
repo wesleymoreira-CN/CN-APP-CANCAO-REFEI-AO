@@ -302,6 +302,87 @@ async function startServer() {
     }
   });
 
+  app.use('/api/shorten-url', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
+  app.post('/api/shorten-url', async (req, res) => {
+    try {
+      const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+      let parsed: URL;
+      try {
+        parsed = new URL(rawUrl);
+      } catch {
+        res.status(400).json({ ok: false, message: 'URL inválida para encurtamento.' });
+        return;
+      }
+
+      const host = parsed.hostname.toLowerCase();
+      if (parsed.protocol !== 'https:' || host === 'localhost' || host === '127.0.0.1' || host.startsWith('ais-dev-')) {
+        res.status(400).json({
+          ok: false,
+          message: 'Apenas URLs públicas HTTPS (ex: Netlify ou ais-pre-...) podem ser encurtadas.',
+        });
+        return;
+      }
+      if (host.includes('script.google.com') || host.includes('docs.google.com')) {
+        res.status(400).json({
+          ok: false,
+          message: 'Informe a URL pública do site do aplicativo, e não o endereço do Google Sheets/Script.',
+        });
+        return;
+      }
+
+      const target = parsed.toString();
+
+      try {
+        const tinyRes = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(target)}`, {
+          signal: AbortSignal.timeout(6000),
+        });
+        if (tinyRes.ok) {
+          const tinyText = (await tinyRes.text()).trim();
+          if (/^https:\/\/tinyurl\.com\/[A-Za-z0-9_-]+$/.test(tinyText)) {
+            res.status(200).json({ ok: true, shortUrl: tinyText, provider: 'tinyurl' });
+            return;
+          }
+        }
+      } catch {
+        // fallback below
+      }
+
+      try {
+        const isGdRes = await fetch(
+          `https://is.gd/create.php?format=simple&url=${encodeURIComponent(target)}`,
+          { signal: AbortSignal.timeout(6000) }
+        );
+        if (isGdRes.ok) {
+          const isGdText = (await isGdRes.text()).trim();
+          if (/^https:\/\/is\.gd\/[A-Za-z0-9_-]+$/.test(isGdText)) {
+            res.status(200).json({ ok: true, shortUrl: isGdText, provider: 'is.gd' });
+            return;
+          }
+        }
+      } catch {
+        // fall through
+      }
+
+      res.status(200).json({
+        ok: false,
+        message: 'Os encurtadores externos não responderam no momento. Tente novamente em instantes.',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Erro interno ao encurtar URL.';
+      res.status(200).json({ ok: false, message: msg });
+    }
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
